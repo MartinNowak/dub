@@ -107,6 +107,7 @@ int runDubCommandLine(string[] args)
 		),
 		CommandGroup("Build, test and run",
 			new RunCommand,
+			new WatchCommand,
 			new BuildCommand,
 			new TestCommand,
 			new GenerateCommand,
@@ -511,6 +512,7 @@ class GenerateCommand : PackageBuildCommand {
 		bool m_rdmd = false;
 		bool m_tempBuild = false;
 		bool m_run = false;
+		bool m_watch = false;
 		bool m_force = false;
 		bool m_combined = false;
 		bool m_parallel = false;
@@ -594,6 +596,7 @@ class GenerateCommand : PackageBuildCommand {
 		gensettings.buildSettings = m_buildSettings;
 		gensettings.combined = m_combined;
 		gensettings.run = m_run;
+		gensettings.watch = m_watch;
 		gensettings.runArgs = app_args;
 		gensettings.force = m_force;
 		gensettings.rdmd = m_rdmd;
@@ -662,6 +665,25 @@ class RunCommand : BuildCommand {
 	override int execute(Dub dub, string[] free_args, string[] app_args)
 	{
 		return super.execute(dub, free_args, app_args);
+	}
+}
+
+class WatchCommand : RunCommand {
+	this()
+	{
+		this.name = "watch";
+		this.argumentsPattern = "[<package>]";
+		this.description = "Runs a package and watches for modifications.";
+		this.helpText = [
+			"Rebuilds and restarts a running app when any dependencies are modified."
+		];
+		this.acceptsAppArgs = true;
+	}
+
+	override void prepare(scope CommandArgs args)
+	{
+		super.prepare(args);
+		m_watch = true;
 	}
 }
 
