@@ -268,7 +268,8 @@ class BuildGenerator : ProjectGenerator {
 		auto cwd = NativePath(getcwd());
 
 		auto generate_binary = !(buildsettings.options & BuildOption.syntaxOnly);
-		auto is_static_library = buildsettings.targetType == TargetType.staticLibrary || buildsettings.targetType == TargetType.library;
+		auto is_static_library = buildsettings.targetType == TargetType.staticLibrary ||
+			!(buildsettings.options & BuildOption.shared_) && buildsettings.targetType == TargetType.library;
 
 		// make file paths relative to shrink the command line
 		foreach (ref f; buildsettings.sourceFiles) {
@@ -426,7 +427,8 @@ class BuildGenerator : ProjectGenerator {
 	private void buildWithCompiler(GeneratorSettings settings, BuildSettings buildsettings)
 	{
 		auto generate_binary = !(buildsettings.options & BuildOption.syntaxOnly);
-		auto is_static_library = buildsettings.targetType == TargetType.staticLibrary || buildsettings.targetType == TargetType.library;
+		auto is_static_library = buildsettings.targetType == TargetType.staticLibrary ||
+			!(buildsettings.options & BuildOption.shared_) && buildsettings.targetType == TargetType.library;
 
 		NativePath target_file;
 		scope (failure) {

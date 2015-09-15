@@ -172,19 +172,30 @@ class DMDCompiler : Compiler {
 
 	void setTarget(ref BuildSettings settings, in BuildPlatform platform, string tpath = null) const
 	{
+		version (Windows) enum sharedPhobos = []; // no phobos2.dll on windows yet
+		else version (OSX) enum sharedPhobos = "-defaultlib=libphobos2.dylib";
+		else enum sharedPhobos = "-defaultlib=libphobos2.so";
+
 		final switch (settings.targetType) {
 			case TargetType.autodetect: assert(false, "Invalid target type: autodetect");
 			case TargetType.none: assert(false, "Invalid target type: none");
 			case TargetType.sourceLibrary: assert(false, "Invalid target type: sourceLibrary");
-			case TargetType.executable: break;
+			case TargetType.executable:
+				if (settings.options & BuildOption.shared_)
+					settings.addDFlags(sharedPhobos);
+				break;
 			case TargetType.library:
+				if (settings.options & BuildOption.shared_)
+					goto Lshared;
+				goto case;
 			case TargetType.staticLibrary:
 				settings.addDFlags("-lib");
 				break;
+		    Lshared:
 			case TargetType.dynamicLibrary:
-				version (Windows) settings.addDFlags("-shared");
-				else version (OSX) settings.addDFlags("-shared");
-				else settings.prependDFlags("-shared", "-defaultlib=libphobos2.so");
+				settings.addDFlags("-shared");
+				if (settings.options & BuildOption.shared_)
+					settings.addDFlags(sharedPhobos);
 				break;
 			case TargetType.object:
 				settings.addDFlags("-c");

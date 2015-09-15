@@ -588,6 +588,7 @@ abstract class PackageBuildCommand : Command {
 		bool m_nodeps;
 		bool m_forceRemove = false;
 		bool m_single;
+		bool m_shared;
 	}
 
 	override void prepare(scope CommandArgs args)
@@ -628,6 +629,9 @@ abstract class PackageBuildCommand : Command {
 		args.getopt("force-remove", &m_forceRemove, [
 			"Deprecated option that does nothing."
 		]);
+		args.getopt("shared", &m_shared, [
+			"Prefer to build and link against shared libraries.",
+		]);
 	}
 
 	protected void setupPackage(Dub dub, string package_name, string default_build_type = "debug")
@@ -637,6 +641,9 @@ abstract class PackageBuildCommand : Command {
 		m_compiler = getCompiler(m_compilerName);
 		m_buildPlatform = m_compiler.determinePlatform(m_buildSettings, m_compilerName, m_arch);
 		m_buildSettings.addDebugVersions(m_debugVersions);
+
+		if (m_shared)
+			m_buildSettings.addOptions(BuildOption.shared_);
 
 		m_defaultConfig = null;
 		enforce (loadSpecificPackage(dub, package_name), "Failed to load package.");

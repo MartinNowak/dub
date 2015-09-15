@@ -303,6 +303,7 @@ enum BuildOption {
 	// for internal usage
 	_docs = 1<<23,                // Write ddoc to docs
 	_ddox = 1<<24                 // Compile docs.json
+	_shared = 1<<25,              // Prefer to build and link against shared libraries
 }
 
 	struct BuildOptions {
