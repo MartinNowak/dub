@@ -584,7 +584,7 @@ version(Windows) extern(Windows) {
 	HANDLE CreateFileW(const(wchar)*, uint, uint, void*, uint, uint, HANDLE);
 	bool ReadDirectoryChangesW(HANDLE, void*, immutable(uint), bool, uint, uint*, void*, void*);
 	bool CloseHandle(HANDLE);
-	void _CompletionRoutine(uint err, uint numbytes, void* overlapped) {}
+	void _CompletionRoutine(uint err, uint numbytes, void* overlapped) nothrow {}
 	uint SleepEx(uint, bool);
 }
 
@@ -702,7 +702,7 @@ struct Watcher
 							   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
 							   null);
 			if(hDir == INVALID_HANDLE_VALUE)
-				assert(0, "Couldn't open directory.");
+				enforce(false, "Couldn't open directory.");
 		}
 		void wait(Pid pid)
 		{
@@ -722,7 +722,7 @@ struct Watcher
 														 &bytesReturned,
 														 cast(void*)&ovlap, 
 														 cast(void*)&_CompletionRoutine);
-					assert(initial, "winapi ReadDirectoryChangesW");
+					enforce(initial, "winapi ReadDirectoryChangesW");
 					HANDLE hProc = pid.osHandle();
 					result = WaitForMultipleObjectsEx(1, &hProc, true, INFINITE, true);
 				} else 
