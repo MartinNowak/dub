@@ -579,7 +579,7 @@ else version (OSX)
 	 version = KQUEUE;
 
 version(Windows) extern(Windows) {
-	import core.sys.windows.windows;
+	import core.sys.windows.windows : HANDLE;
 	uint WaitForMultipleObjectsEx(uint, HANDLE*, bool, uint, bool);
 	HANDLE CreateFileW(const(wchar)*, uint, uint, void*, uint, uint, HANDLE);
 	bool ReadDirectoryChangesW(HANDLE, void*, immutable(uint), bool, uint, uint*, void*, void*);
@@ -599,6 +599,7 @@ struct Watcher
 		import core.sys.osx.sys.event;
 	else version (Windows) {
 		import std.utf : toUTF16z;
+		import core.sys.windows.windows;
 	}
 
 	void addFile(string path)
@@ -643,13 +644,6 @@ struct Watcher
 
 	version(Windows)
 	{
-		// This struct is not used at all.
-		// TODO: try to optimize it out?
-		struct OVERLAPPED {
-			size_t* Internal; size_t* InternalHigh;
-			struct Inner { uint Offset; uint OffsetHigh; }
-			HANDLE hEvent;
-		}
 		// Recursively get more and more specific wrt first member of paths[]
 		private Path getAncestor(Path[] paths, Path accum = Path([]), int cdepth = 0) {
 			// vibe.d bug in opEquals?	accum should eventually == paths if paths.length = 1
@@ -715,9 +709,9 @@ struct Watcher
 			createFileHandle();
 			logInfo("Watching for changes in the files or process exit.");
 			immutable buff_siz = 4096;
-			void* buffer = cast(void*)(new byte[buff_siz]);
+			void* buffer = cast(void*)(new ubyte[buff_siz]);
 			uint bytesReturned = 0; // completely useless
-			OVERLAPPED ovlap;  // also useless
+			ubyte[12] ovlap;  // also useless
 			uint result;
 			do
 			{
@@ -726,7 +720,8 @@ struct Watcher
 														 true, // watch subdirs
 														 FILE_NOTIFY_CHANGE_LAST_WRITE,
 														 &bytesReturned,
-														 &ovlap, cast(void*)&_CompletionRoutine);
+														 cast(void*)&ovlap, 
+														 cast(void*)&_CompletionRoutine);
 					assert(initial, "winapi ReadDirectoryChangesW");
 					HANDLE hProc = pid.osHandle();
 					result = WaitForMultipleObjectsEx(1, &hProc, true, INFINITE, true);
@@ -738,7 +733,7 @@ struct Watcher
 		void wait()
 		{
 			createFileHandle();
-			logInfo("Watching for changes in the files or process exit.");
+			logInfo("Watching for changes in the files.");
 			immutable buff_siz = 4096;
 			void* buffer = cast(void*)(new byte[buff_siz]);
 			uint bytesReturned = 0; // completely useless
