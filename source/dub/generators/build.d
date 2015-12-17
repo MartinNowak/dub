@@ -417,8 +417,8 @@ class BuildGenerator : ProjectGenerator {
 
 		/*
 			NOTE: for DMD experimental separate compile/link is used, but this is not yet implemented
-			      on the other compilers. Later this should be integrated somehow in the build process
-			      (either in the dub.json, or using a command line flag)
+				  on the other compilers. Later this should be integrated somehow in the build process
+				  (either in the dub.json, or using a command line flag)
 		*/
 		} else if (settings.buildMode == BuildMode.allAtOnce || settings.platform.compilerBinary != "dmd" || !generate_binary || is_static_library) {
 			// setup for command line
@@ -577,8 +577,16 @@ else version (FreeBSD)
 	 version = KQUEUE;
 else version (OSX)
 	 version = KQUEUE;
-else
-	 static assert(0, "Filewatcher support not yet implemented");
+
+version(Windows) extern(Windows) {
+	import core.sys.windows.windows;
+	uint WaitForMultipleObjectsEx(uint, HANDLE*, bool, uint, bool);
+	HANDLE CreateFileW(const(wchar)*, uint, uint, void*, uint, uint, HANDLE);
+	bool ReadDirectoryChangesW(HANDLE, void*, immutable(uint), bool, uint, uint*, void*, void*);
+	bool CloseHandle(HANDLE);
+	void _CompletionRoutine(uint err, uint numbytes, void* overlapped) {}
+	uint SleepEx(uint, bool);
+}
 
 struct Watcher
 {
@@ -586,9 +594,12 @@ struct Watcher
 	version (linux)
 	import core.sys.linux.sys.inotify, core.sys.posix.fcntl : O_NONBLOCK;
 	else version (FreeBSD)
-	    import core.sys.posix.fcntl, core.sys.freebsd.sys.event;
+		import core.sys.posix.fcntl, core.sys.freebsd.sys.event;
 	else version (OSX)
 		import core.sys.osx.sys.event;
+	else version (Windows) {
+		import std.utf : toUTF16z;
+	}
 
 	void addFile(string path)
 	{
@@ -624,98 +635,232 @@ struct Watcher
 			kevent_t event;
 			EV_SET(&event, fd, EVFILT_VNODE, EV_ADD | EV_CLEAR, fflags, 0, null);
 			errnoEnforce(kevent(eventfd, &event, 1, null, 0, null) != -1);
+		} else version (Windows) {
+			paths ~= path; 
 		} else
 			static assert(0, "no file watcher event system");
 	}
 
-	void wait(Pid pid)
+	version(Windows)
 	{
-		import core.sys.posix.signal, core.sys.posix.sys.select;
-
-		// Block SIGCHLD
-		sigset_t set;
-		sigemptyset(&set);
-		sigaddset(&set, SIGCHLD);
-		sigprocmask(SIG_BLOCK, &set, null);
-
-		// Add dummy handler SIGCHLD
-		extern(C) void dummy_handler(int) {}
-		sigaction_t sa;
-		sa.sa_handler = &dummy_handler;
-		sa.sa_flags = 0;
-		sigemptyset(&sa.sa_mask);
-		sigaction(SIGCHLD, &sa, null);
-
-		if (!tryWait(pid).terminated)
+		// This struct is not used at all.
+		// TODO: try to optimize it out?
+		struct OVERLAPPED {
+			size_t* Internal; size_t* InternalHigh;
+			struct Inner { uint Offset; uint OffsetHigh; }
+			HANDLE hEvent;
+		}
+		// Recursively get more and more specific wrt first member of paths[]
+		private Path getAncestor(Path[] paths, Path accum = Path([]), int cdepth = 0) {
+			// vibe.d bug in opEquals?	accum should eventually == paths if paths.length = 1
+			// but it never does.
+			if(cdepth == 0) {
+				accum = Path(paths[0][0]);
+				return getAncestor(paths, accum, 1);
+			} else {
+				if(paths.all!(p => p.startsWith(accum)) && accum.length() < paths[0].length())// && accum != paths[0])
+					return getAncestor(paths, accum ~ paths[0][cdepth], cdepth + 1);
+				else
+					return accum.parentPath();
+			}
+		}
+		// Gets the most specific Ancestor Path a list of absolute paths:
+		private string getAncestor(string[] paths) {
+			auto ps = paths.map!(path => Path(path)).array; // lazy better?
+			return to!string(getAncestor(ps)).replace("/", "\\");
+		}
+		// returns true if watched file has changed:
+		bool processBuffer(void* buf) {
+			struct FILE_NOTIFY_INFORMATION {
+				uint NextEntryOffset;
+				uint Action;
+				uint FileNameLength;
+				wchar[0] FileName; // variable length struct
+			}
+			logInfo("Processing buffer.");
+			int nextOffset = 0;
+			FILE_NOTIFY_INFORMATION* info;
+			do {
+				info = cast(FILE_NOTIFY_INFORMATION*)(buf + nextOffset);
+				auto ws = (cast(wchar*)info.FileName)[0..info.FileNameLength/wchar.sizeof];
+				string fname = to!string(to!wstring(ws)); // TODO: make this better?
+				string fpath = joinPath(dir, fname).replace("/", "\\"); // why does vibe.d do this?
+				if(paths.canFind(fpath) && info.Action == FILE_ACTION_MODIFIED) {
+				   return true; 
+				}
+				// TODO: Check if this is actually a correct loop.
+				nextOffset += info.NextEntryOffset; // NextEntryOffset = 0 when it's the last. 
+				logInfo("Unwatched file event: " ~ fpath);
+			} while (info.NextEntryOffset != 0);
+			return false;
+		}
+		void createFileHandle() {
+			if(hDir != INVALID_HANDLE_VALUE)
+				return;
+			dir = getAncestor(paths);
+			logInfo("Determined to watch: " ~ dir);
+			hDir = CreateFileW(toUTF16z(dir),
+							   FILE_LIST_DIRECTORY, // required for reading changes
+							   FILE_SHARE_READ | FILE_SHARE_WRITE, // No delete b/c
+							   // otherwise user can delete the directory.
+							   null, // security attr.
+							   OPEN_EXISTING,
+							   FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OVERLAPPED,
+							   null);
+			if(hDir == INVALID_HANDLE_VALUE)
+				assert(0, "Couldn't open directory.");
+		}
+		void wait(Pid pid)
 		{
+			createFileHandle();
+			logInfo("Watching for changes in the files or process exit.");
+			immutable buff_siz = 4096;
+			void* buffer = cast(void*)(new byte[buff_siz]);
+			uint bytesReturned = 0; // completely useless
+			OVERLAPPED ovlap;  // also useless
+			uint result;
+			do
+			{
+				if(!tryWait(pid).terminated) {
+					auto initial = ReadDirectoryChangesW(hDir, buffer, buff_siz,
+														 true, // watch subdirs
+														 FILE_NOTIFY_CHANGE_LAST_WRITE,
+														 &bytesReturned,
+														 &ovlap, cast(void*)&_CompletionRoutine);
+					assert(initial, "winapi ReadDirectoryChangesW");
+					HANDLE hProc = pid.osHandle();
+					result = WaitForMultipleObjectsEx(1, &hProc, true, INFINITE, true);
+				} else 
+					break;
+			} while (result != WAIT_OBJECT_0 && !processBuffer(buffer));
+		} 
+
+		void wait()
+		{
+			createFileHandle();
+			logInfo("Watching for changes in the files or process exit.");
+			immutable buff_siz = 4096;
+			void* buffer = cast(void*)(new byte[buff_siz]);
+			uint bytesReturned = 0; // completely useless
+			OVERLAPPED ovlap;  // also useless
+			uint result;
+			do {
+				auto initial = ReadDirectoryChangesW(hDir, buffer, buff_siz,
+													 true, // watch subdirs
+													 FILE_NOTIFY_CHANGE_LAST_WRITE,
+													 &bytesReturned,
+													 &ovlap, cast(void*)&_CompletionRoutine);
+				result = SleepEx(INFINITE, true);
+			} while (!processBuffer(buffer));
+		}
+
+		void readChanges()
+		{
+			createFileHandle();
+			// We already read the information in processBuffer.
+		}
+
+		~this()
+		{
+			if (hDir != INVALID_HANDLE_VALUE)
+				CloseHandle(hDir);
+		}
+
+		string[] paths;
+		string dir;
+		HANDLE hDir = INVALID_HANDLE_VALUE;
+	}
+	else  // Linux, BSD, OSX
+	{
+		void wait(Pid pid)
+		{
+			import core.sys.posix.signal, core.sys.posix.sys.select;
+
+			// Block SIGCHLD
+			sigset_t set;
+			sigemptyset(&set);
+			sigaddset(&set, SIGCHLD);
+			sigprocmask(SIG_BLOCK, &set, null);
+
+			// Add dummy handler SIGCHLD
+			extern(C) void dummy_handler(int) {}
+			sigaction_t sa;
+			sa.sa_handler = &dummy_handler;
+			sa.sa_flags = 0;
+			sigemptyset(&sa.sa_mask);
+			sigaction(SIGCHLD, &sa, null);
+
+			if (!tryWait(pid).terminated)
+			{
+				fd_set rfds=void;
+				FD_ZERO(&rfds);
+				FD_SET(eventfd, &rfds);
+
+				sigset_t emptyset;
+				sigemptyset(&emptyset);
+				// wait for inotify or SIGCHLD
+				logInfo("Waiting for file changes or child exit.");
+				auto res = pselect(eventfd+1, &rfds, null, null, null, &emptyset);
+			}
+			// Unblock SIGCHLD
+			sigaddset(&set, SIGCHLD);
+			sigprocmask(SIG_UNBLOCK, &set, null);
+
+			// Remove SIGCHLD handler
+			sigaction(SIGCHLD, cast(sigaction_t*)SIG_DFL, null);
+		}
+	
+		void wait()
+		{
+			import core.sys.posix.sys.select;
+
 			fd_set rfds=void;
 			FD_ZERO(&rfds);
 			FD_SET(eventfd, &rfds);
-
-			sigset_t emptyset;
-			sigemptyset(&emptyset);
-			// wait for inotify or SIGCHLD
-			logInfo("Waiting for file changes or child exit.");
-			auto res = pselect(eventfd+1, &rfds, null, null, null, &emptyset);
+			logInfo("Waiting for file changes.");
+			auto res = select(eventfd+1, &rfds, null, null, null);
 		}
-		// Unblock SIGCHLD
-		sigaddset(&set, SIGCHLD);
-		sigprocmask(SIG_UNBLOCK, &set, null);
 
-		// Remove SIGCHLD handler
-		sigaction(SIGCHLD, cast(sigaction_t*)SIG_DFL, null);
-	}
+		void readChanges()
+		{
+			import core.stdc.errno, core.sys.posix.unistd;
 
-	void wait()
-	{
-		import core.sys.posix.sys.select;
-
-		fd_set rfds=void;
-		FD_ZERO(&rfds);
-		FD_SET(eventfd, &rfds);
-		logInfo("Waiting for file changes.");
-		auto res = select(eventfd+1, &rfds, null, null, null);
-	}
-
-	void readChanges()
-	{
-		import core.stdc.errno, core.sys.posix.unistd;
-
-		version (INOTIFY) {
-			ubyte[1024] buf=void;
-			while (true) {
-				if (read(eventfd, buf.ptr, buf.length) != -1 || errno == EINTR)
-					continue;
-				else if (errno == EAGAIN)
-					return;
-				else
-					errnoEnforce(false);
-			}
-		} else version (KQUEUE) {
-			import core.sys.posix.time;
-			timespec ts;
-			kevent_t[8] buf=void;
-			while (true) {
-				auto res = kevent(eventfd, null, 0, buf.ptr, buf.length, &ts);
-				if (res > 0)
-					continue;
-				else if (res == 0)
-					return;
-				else
-					errnoEnforce(false);
+			version (INOTIFY) {
+				ubyte[1024] buf=void;
+				while (true) {
+					if (read(eventfd, buf.ptr, buf.length) != -1 || errno == EINTR)
+						continue;
+					else if (errno == EAGAIN)
+						return;
+					else
+						errnoEnforce(false);
+				}
+			} else version (KQUEUE) {
+				import core.sys.posix.time;
+				timespec ts;
+				kevent_t[8] buf=void;
+				while (true) {
+					auto res = kevent(eventfd, null, 0, buf.ptr, buf.length, &ts);
+					if (res > 0)
+						continue;
+					else if (res == 0)
+						return;
+					else
+						errnoEnforce(false);
+				}
 			}
 		}
+
+		~this()
+		{
+			import core.sys.posix.unistd;
+
+			if (eventfd)
+				close(eventfd);
+		}
+
+		int eventfd;
 	}
-
-	~this()
-	{
-		import core.sys.posix.unistd;
-
-		if (eventfd)
-			close(eventfd);
-	}
-
-	int eventfd;
 }
 
 private Path getMainSourceFile(in Package prj)
