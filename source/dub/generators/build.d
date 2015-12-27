@@ -577,16 +577,15 @@ else version (FreeBSD)
 	 version = KQUEUE;
 else version (OSX)
 	 version = KQUEUE;
-
-version(Windows) extern(Windows) {
-	import core.sys.windows.windows : HANDLE;
-	uint WaitForMultipleObjectsEx(uint, HANDLE*, bool, uint, bool);
-	HANDLE CreateFileW(const(wchar)*, uint, uint, void*, uint, uint, HANDLE);
-	bool ReadDirectoryChangesW(HANDLE, void*, immutable(uint), bool, uint, uint*, void*, void*);
-	bool CloseHandle(HANDLE);
+else version(Windows) extern(Windows) {
+	uint WaitForMultipleObjectsEx(uint, void**, bool, uint, bool);
+	void* CreateFileW(const(wchar)*, uint, uint, void*, uint, uint, void*);
+	bool ReadDirectoryChangesW(void*, void*, immutable(uint), bool, uint, uint*, void*, void*);
+	bool CloseHandle(void*);
 	void _CompletionRoutine(uint err, uint numbytes, void* overlapped) nothrow {}
 	uint SleepEx(uint, bool);
-}
+} else 
+	static assert(0, "Filewatcher support not yet implemented");
 
 struct Watcher
 {
@@ -723,7 +722,7 @@ struct Watcher
 														 cast(void*)&ovlap, 
 														 cast(void*)&_CompletionRoutine);
 					enforce(initial, "winapi ReadDirectoryChangesW");
-					HANDLE hProc = pid.osHandle();
+					void* hProc = pid.osHandle();
 					result = WaitForMultipleObjectsEx(1, &hProc, true, INFINITE, true);
 				} else 
 					break;
@@ -763,7 +762,7 @@ struct Watcher
 
 		string[] paths;
 		string dir;
-		HANDLE hDir = INVALID_HANDLE_VALUE;
+		void* hDir = INVALID_HANDLE_VALUE;
 	}
 	else  // Linux, BSD, OSX
 	{
