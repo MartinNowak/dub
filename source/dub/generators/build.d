@@ -116,7 +116,8 @@ class BuildGenerator : ProjectGenerator {
 		auto cwd = NativePath(getcwd());
 		bool generate_binary = !(buildsettings.options & BuildOption.syntaxOnly);
 
-		auto build_id = computeBuildID(config, buildsettings, settings);
+		filterApplicableFlags(buildsettings, pack.path);
+		auto build_id = computeBuildID(config, pack.name, buildsettings, settings);
 
 		// make all paths relative to shrink the command line
 		string makeRelative(string path) { return shrinkPath(NativePath(path), cwd); }
@@ -317,16 +318,17 @@ class BuildGenerator : ProjectGenerator {
 		}
 	}
 
-	private string computeBuildID(string config, in BuildSettings buildsettings, GeneratorSettings settings)
+	private string computeBuildID(string config, string packname, in BuildSettings buildsettings, GeneratorSettings settings)
 	{
 		import std.digest.digest;
 		import std.digest.md;
 		import std.bitmanip;
 
+		string[] parts;
 		MD5 hash;
 		hash.start();
-		void addHash(in string[] strings...) { foreach (s; strings) { hash.put(cast(ubyte[])s); hash.put(0); } hash.put(0); }
-		void addHashI(int value) { hash.put(nativeToLittleEndian(value)); }
+		void addHash(in string[] strings...) { parts ~= strings; foreach (s; strings) { hash.put(cast(ubyte[])s); hash.put(0); } hash.put(0); }
+		void addHashI(int value) { parts ~= value.to!string; hash.put(nativeToLittleEndian(value)); }
 		addHash(buildsettings.versions);
 		addHash(buildsettings.debugVersions);
 		//addHash(buildsettings.versionLevel);
@@ -340,11 +342,47 @@ class BuildGenerator : ProjectGenerator {
 		addHash(settings.platform.compiler);
 		addHashI(settings.platform.frontendVersion);
 		auto hashstr = hash.finish().toHexString().idup;
+		logInfo("BuildID,%s,%s-%s-%s-%s-%s_%s-%-(%s-%)", packname, config, settings.buildType,
+			settings.platform.platform.join("."),
+			settings.platform.architecture.join("."),
+			settings.platform.compiler, settings.platform.frontendVersion, parts);
 
 		return format("%s-%s-%s-%s-%s_%s-%s", config, settings.buildType,
 			settings.platform.platform.join("."),
 			settings.platform.architecture.join("."),
 			settings.platform.compiler, settings.platform.frontendVersion, hashstr);
+	}
+
+	private void filterApplicableFlags(ref BuildSettings buildsettings, in NativePath packPath)
+	{
+		import std.regex : matchAll, ctRegex;
+		import dub.internal.vibecompat.data.json : Json;
+
+		auto cachePath = packPath ~ ".dub/build/versions.json";
+		enum silentFail = true;
+		auto cache = jsonFromFile(cachePath, silentFail);
+		if (!cache.length)
+		{
+			alias Dummy = void[0];
+			scope Dummy[const(char)[]] versions, debugVersions;
+			foreach (f; buildsettings.sourceFiles)
+			{
+				scope content = std.file.read(f);
+				foreach (c; matchAll(cast(char[]) content, ctRegex!(`(version|debug)\s*\(([^)]*)\)`, "s")))
+				{
+					const identifier = c[2];
+					(c[1] == "version" ? versions : debugVersions)[identifier] = Dummy.init;
+				}
+			}
+			cache["versions"] = versions.byKey.map!(v => Json(v.idup)).array;
+			cache["debugVersions"] = debugVersions.byKey.map!(v => Json(v.idup)).array;
+			mkdirRecurse(cachePath.parentPath.toNativeString);
+			writeJsonFile(cachePath, cache);
+		}
+		auto versions = cache["versions"].get!(Json[]).map!(j => j.get!string);
+		auto debugVersions = cache["debugVersions"].get!(Json[]).map!(j => j.get!string);
+		buildsettings.versions = buildsettings.versions.remove!(v => !versions.canFind(v));
+		buildsettings.debugVersions = buildsettings.debugVersions.remove!(v => !debugVersions.canFind(v));
 	}
 
 	private void copyTargetFile(NativePath build_path, BuildSettings buildsettings, GeneratorSettings settings)
