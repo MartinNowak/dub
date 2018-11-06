@@ -429,6 +429,7 @@ class ProjectGenerator
 		import std.regex : ctRegex, matchAll;
 		import std.stdio : File;
 		import std.datetime : Clock, SysTime, UTC;
+		import dub.compilers.utils : isLinkerFile;
 		import dub.internal.vibecompat.data.json : Json, JSONException;
 
 		auto bs = &ti.buildSettings;
@@ -441,8 +442,9 @@ class ProjectGenerator
 			return;
 		}
 
-		// check all sources for version identifiers
-		auto srcs = chain(bs.sourceFiles, bs.importFiles, bs.stringImportFiles);
+		// check all existing source files for version identifiers
+		auto srcs = chain(bs.sourceFiles, bs.importFiles, bs.stringImportFiles)
+			.filter!(f => !f.isLinkerFile).filter!exists;
 		// try to load cached filters first
 		auto cache = ti.pack.metadataCache;
 		try
