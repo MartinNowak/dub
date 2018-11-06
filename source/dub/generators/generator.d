@@ -101,12 +101,10 @@ class ProjectGenerator
 			prepareGeneration(pack, m_project, settings, buildSettings);
 		}
 
-		string[] mainfiles = configurePackages(m_project.rootPackage, targets, settings);
+		configurePackages(m_project.rootPackage, targets, settings);
 
 		addBuildTypeSettings(targets, settings);
 		foreach (ref t; targets.byValue) enforceBuildRequirements(t.buildSettings);
-		auto bs = &targets[m_project.rootPackage.name].buildSettings;
-		if (bs.targetType == TargetType.executable) bs.addSourceFiles(mainfiles);
 
 		generateTargets(settings, targets);
 
@@ -114,6 +112,7 @@ class ProjectGenerator
 			BuildSettings buildsettings;
 			buildsettings.processVars(m_project, pack, pack.getBuildSettings(settings.platform, configs[pack.name]), settings, true);
 			bool generate_binary = !(buildsettings.options & BuildOption.syntaxOnly);
+			auto bs = &targets[m_project.rootPackage.name].buildSettings;
 			finalizeGeneration(pack, m_project, settings, buildsettings, NativePath(bs.targetPath), generate_binary);
 		}
 
@@ -168,7 +167,7 @@ class ProjectGenerator
 		Note: Targets without output are integrated into their
 		dependents and removed from `targets`.
 	 */
-	private string[] configurePackages(Package rootPackage, TargetInfo[string] targets, GeneratorSettings genSettings)
+	private void configurePackages(Package rootPackage, TargetInfo[string] targets, GeneratorSettings genSettings)
 	{
 		import std.algorithm : remove, sort;
 		import std.range : repeat;
@@ -229,6 +228,12 @@ class ProjectGenerator
 			}
 			bool generatesBinary = bs.targetType != TargetType.sourceLibrary && bs.targetType != TargetType.none;
 			hasOutput[ti.pack.name] = generatesBinary || ti.pack is rootPackage;
+		}
+
+		// add main source files to root executable
+		{
+			auto bs = &targets[rootPackage.name].buildSettings;
+			if (bs.targetType == TargetType.executable) bs.addSourceFiles(mainSourceFiles);
 		}
 
 		// mark packages as visited (only used during upwards propagation)
