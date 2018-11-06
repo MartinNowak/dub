@@ -71,7 +71,8 @@ struct BuildSettings {
 		addCopyFiles(bs.copyFiles);
 		addVersions(bs.versions);
 		addDebugVersions(bs.debugVersions);
-		mergeVersionFilters(bs);
+		addVersionFilters(bs.versionFilters);
+		addDebugVersionFilters(bs.debugVersionFilters);
 		addImportPaths(bs.importPaths);
 		addStringImportPaths(bs.stringImportPaths);
 		addImportFiles(bs.importFiles);
@@ -80,20 +81,6 @@ struct BuildSettings {
 		addPostGenerateCommands(bs.postGenerateCommands);
 		addPreBuildCommands(bs.preBuildCommands);
 		addPostBuildCommands(bs.postBuildCommands);
-	}
-
-	void mergeVersionFilters(in ref BuildSettings bs)
-	{
-		// only filter version identifiers if they are explicitly listed in both
-		// build settings, so to avoid incorrect filtering
-		if (versionFilters.length && bs.versionFilters.length)
-			addVersionFilters(bs.versionFilters);
-		else
-			versionFilters = null;
-		if (debugVersionFilters.length && bs.debugVersionFilters.length)
-			addDebugVersionFilters(bs.debugVersionFilters);
-		else
-			debugVersionFilters = null;
 	}
 
 	void addDFlags(in string[] value...) { dflags ~= value; }
