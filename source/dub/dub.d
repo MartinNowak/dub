@@ -63,6 +63,8 @@ deprecated("use defaultRegistryURLs") enum defaultRegistryURL = defaultRegistryU
 
 /// The URL to the official package registry and it's default fallback registries.
 enum defaultRegistryURLs = [
+	"gitidx+https://code.dlang.org/?repo=https://github.com/MartinNowak/dub-index",
+	// fallback to registry without index git repository
 	"https://code.dlang.org/",
 	// fallback in case of HTTPS problems
 	"http://code.dlang.org/",
@@ -90,12 +92,15 @@ PackageSupplier[] defaultPackageSuppliers()
 */
 PackageSupplier getRegistryPackageSupplier(string url)
 {
-	switch (url.startsWith("dub+", "mvn+"))
+	switch (url.startsWith("dub+", "mvn+", "gitidx+"))
 	{
 		case 1:
 			return new RegistryPackageSupplier(URL(url[4..$]));
 		case 2:
 			return new MavenRegistryPackageSupplier(URL(url[4..$]));
+		case 3:
+			auto parts = url[7 .. $].findSplit("?repo="); // poor man's query parsing
+			return new GitIndexRegistryPackageSupplier(URL(parts[0]), URL(parts[2]));
 		default:
 			return new RegistryPackageSupplier(URL(url));
 	}

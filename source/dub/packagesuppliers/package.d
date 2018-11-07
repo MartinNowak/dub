@@ -8,3 +8,4 @@ public import dub.packagesuppliers.filesystem;
 public import dub.packagesuppliers.packagesupplier;
 public import dub.packagesuppliers.maven;
 public import dub.packagesuppliers.registry;
+public import dub.packagesuppliers.git_index_registry;
