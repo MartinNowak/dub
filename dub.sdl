@@ -7,6 +7,10 @@ license "MIT"
 
 targetPath "bin"
 
+dependency "dlibgit" version="~>0.50.6"
+dependency "libgit2" version="~>0.20.1"
+subConfiguration "libgit2" "static-library-networking"
+
 configuration "application" {
 	targetType "executable"
 	mainSourceFile "source/app.d"
