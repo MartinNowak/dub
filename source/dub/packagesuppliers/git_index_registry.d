@@ -10,11 +10,10 @@ import dub.packagesuppliers.registry : RegistryPackageSupplier;
 	$(LINK https://code.dlang.org/)) to search for available packages.
 */
 class GitIndexRegistryPackageSupplier : RegistryPackageSupplier {
-	import dub.internal.vibecompat.inet.url : URL;
-	import dub.internal.vibecompat.data.json : parseJsonString;
-	import std.file : exists;
-
 	import dub.internal.vibecompat.core.log;
+	import dub.internal.vibecompat.data.json : parseJsonString;
+	import dub.internal.vibecompat.inet.url : URL;
+	import std.process : execute, ProcessConfig=Config;
 
 	private {
 		URL m_indexRepo;
@@ -37,19 +36,25 @@ class GitIndexRegistryPackageSupplier : RegistryPackageSupplier {
 	protected override Json getUncachedMetadata(string packageId)
 	{
 		import std.algorithm.iteration : map;
+		import std.algorithm.searching : canFind;
 		import std.array : array;
-		import std.path : buildPath;
-		import std.stdio : File;
+		import std.string : lineSplitter;
 
 		if (!m_repoIsUpToDate)
 			updateRepo();
 
-		auto path = buildPath(m_repoPath, pkgPath(packageId));
-		logDebug("Loading Metadata from %s %s", path, path.exists);
-		if (!path.exists)
+		auto path = pkgPath(packageId);
+		logDebug("Loading metadata %s from index git repository", path);
+		// read file directly from git object database
+		immutable git = execute(["git", "-C", m_repoPath, "show", "master:"~path]);
+		if (git.status)
+		{
+			if (!git.output.canFind("does not exist"))
+				logDiagnostic("Failed to load metadata %s from index git repository\n%s", git.output);
 			return Json(null);
+		}
 
-		auto versions = File(path).byLineCopy
+		auto versions = git.output.lineSplitter
 			.map!((ln) { auto j = parseJsonString(ln, path); j["name"] = packageId; return j; })
 			.array;
 		return Json(["versions": Json(versions)]);
@@ -57,17 +62,26 @@ class GitIndexRegistryPackageSupplier : RegistryPackageSupplier {
 
 	private void updateRepo()
 	{
-		import std.process : execute;
+		import std.conv : to;
+		import std.file : exists;
 
 		// TODO: use libgit2
 		logInfo("Updating dub index");
-		immutable rc = m_repoPath.exists ? execute(["git", "-C", m_repoPath, "pull", "--quiet"]) :
-			execute(["git", "clone", "--quiet", m_indexRepo.toString, m_repoPath]);
-		if (rc.status)
+
+		// TODO: detect corrupt repositories
+		auto cmd = !m_repoPath.exists ?
+			// clone a bare repo to not fiddle around with weird working dir states
+			["git", "clone", "--quiet", "--bare", m_indexRepo.toString, m_repoPath] :
+			// forcefully update local master ref (+ prefix) in case remote commits were squashed
+			["git", "-C", m_repoPath, "fetch", "--quiet", "origin", "+master:master"];
+		if (getLogLevel <= LogLevel.info)
+			cmd ~= "--progress";
+		immutable git = execute(cmd, null, ProcessConfig.stderrPassThrough);
+
+		if (git.status)
 		{
-			logWarn("Failed to update dub index, continuing with stale index.");
-			logDiagnostic("  dub index at %s", m_repoPath);
-			logDiagnostic("%s", rc.output);
+			logWarn("Failed to update index git repository, continuing with stale index.");
+			logDiagnostic("  index git repository at %s", m_repoPath);
 		}
 		m_repoIsUpToDate = true;
 	}
