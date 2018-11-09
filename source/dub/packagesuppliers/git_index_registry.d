@@ -102,12 +102,13 @@ class GitIndexRegistryPackageSupplier : RegistryPackageSupplier {
 
 	private void updateRepo()
 	{
+		import core.time : minutes;
 		import std.conv : to;
+		import std.datetime : Clock;
 		import std.exception : collectException;
-		import std.file : exists, rmdirRecurse;
+		import std.file : exists, setTimes, timeLastModified, rmdirRecurse;
 		import std.stdio : stderr;
 
-		logInfo("Updating dub index");
 		m_isUpToDate = true; // don't retry updating ad infinitum on failure
 
 		if (m_repoPath.exists)
@@ -116,6 +117,14 @@ class GitIndexRegistryPackageSupplier : RegistryPackageSupplier {
 			if (!collectException!GitException(m_repo = m_repoPath.openBareRepository) &&
 				!collectException!GitException(m_repo.head))
 			{
+				auto headPath = m_repoPath ~ "/HEAD";
+				immutable lastUpdate = headPath.timeLastModified, now = Clock.currTime;
+				if (now - 1.minutes < lastUpdate && lastUpdate <= now)
+				{
+					logDiagnostic("Skipping dub index update, last update was less than a minute ago.");
+					return;
+				}
+				logInfo("Updating dub index");
 				auto remote = m_repo.createRemoteInMemory("+refs/heads/master:refs/heads/master", m_remoteRepo);
 				try
 				{
@@ -130,12 +139,14 @@ class GitIndexRegistryPackageSupplier : RegistryPackageSupplier {
 					logWarn("Failed to update index git repository, continuing with stale index.\n  %s", e.msg);
 					logDiagnostic("  index git repository at %s", m_repoPath);
 				}
+				headPath.setTimes(now, now);
 				return;
 			}
 			// or try to remove and reclone otherwise
 			rmdirRecurse(m_repoPath);
 		}
 
+		logInfo("Updating dub index");
 		GitCloneOptions cloneOpts;
 		cloneOpts.cloneBare = true;
 		if (getLogLevel <= LogLevel.info)
