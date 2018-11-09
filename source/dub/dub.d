@@ -59,9 +59,13 @@ static this()
 	registerCompiler(new LDCCompiler);
 }
 
-/// The URL to the official package registry.
-enum defaultRegistryURL = "https://code.dlang.org/";
-enum fallbackRegistryURLs = [
+deprecated("use defaultRegistryURLs") enum defaultRegistryURL = defaultRegistryURLs[0];
+
+/// The URL to the official package registry and it's default fallback registries.
+enum defaultRegistryURLs = [
+	"gitidx+https://code.dlang.org/?repo=https://github.com/MartinNowak/dub-index",
+	// fallback to registry without index git repository
+	"https://code.dlang.org/",
 	// fallback in case of HTTPS problems
 	"http://code.dlang.org/",
 	"https://code-mirror.dlang.io/",
@@ -74,17 +78,12 @@ enum fallbackRegistryURLs = [
 	This will contain a single package supplier that points to the official
 	package registry.
 
-	See_Also: `defaultRegistryURL`
+	See_Also: `defaultRegistryURLs`
 */
 PackageSupplier[] defaultPackageSuppliers()
 {
-	logDiagnostic("Using dub registry url '%s'", defaultRegistryURL);
-	return [
-		new FallbackPackageSupplier(
-			new RegistryPackageSupplier(URL(defaultRegistryURL)),
-			fallbackRegistryURLs.map!(x => cast(PackageSupplier) new RegistryPackageSupplier(URL(x))).array
-		)
-	];
+	logDiagnostic("Using dub registry url '%s'", defaultRegistryURLs[0]);
+	return [new FallbackPackageSupplier(defaultRegistryURLs.map!getRegistryPackageSupplier.array)];
 }
 
 /** Returns a registry package supplier according to protocol.
@@ -93,12 +92,15 @@ PackageSupplier[] defaultPackageSuppliers()
 */
 PackageSupplier getRegistryPackageSupplier(string url)
 {
-	switch (url.startsWith("dub+", "mvn+"))
+	switch (url.startsWith("dub+", "mvn+", "gitidx+"))
 	{
 		case 1:
 			return new RegistryPackageSupplier(URL(url[4..$]));
 		case 2:
 			return new MavenRegistryPackageSupplier(URL(url[4..$]));
+		case 3:
+			auto parts = url[7 .. $].findSplit("?repo="); // poor man's query parsing
+			return new GitIndexRegistryPackageSupplier(URL(parts[0]), URL(parts[2]));
 		default:
 			return new RegistryPackageSupplier(URL(url));
 	}
@@ -773,6 +775,7 @@ class Dub {
 
 		if (existsFile(path ~ ".dub/build")) rmdirRecurse((path ~ ".dub/build").toNativeString());
 		if (existsFile(path ~ ".dub/obj")) rmdirRecurse((path ~ ".dub/obj").toNativeString());
+		if (existsFile(path ~ ".dub/metadata_cache.json")) std.file.remove((path ~ ".dub/metadata_cache.json").toNativeString());
 
 		auto p = Package.load(path);
 		if (p.getBuildSettings().targetType == TargetType.none) {
